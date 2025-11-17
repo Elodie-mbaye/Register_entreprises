@@ -263,83 +263,100 @@ def generate_pdf_url(annonce):
         pass
     return url0
 
+from flask import request, jsonify
+
 @app.route("/bodacc", methods=["GET"])
 def bodacc():
     """
-    Route BODACC blindée pour Render :
-    - ne dépend pas de la session
-    - renvoie toujours du JSON {results: [...]}
-    - n'envoie jamais d'erreur 500 (même en cas de plantage interne)
+    Route BODACC simplifiée pour Render :
+    - pas de session Flask
+    - 1 seul appel HTTP vers l'API BODACC avec timeout
+    - jamais de blocage infini
+    - renvoie toujours un JSON {results: [...]}
     """
 
-    try:
-        s = (request.args.get("siret") or request.args.get("siren") or "").strip()
+    # Pour voir dans les logs Render que cette route est bien utilisée
+    current_app.logger.error("=== /bodacc appelée ===")
 
-        if not s:
-            return jsonify({"results": [], "error": "Paramètre siret ou siren manquant"}), 200
+    # --- 1) Récupération du SIREN/SIRET ---
+    s = (request.args.get("siret") or request.args.get("siren") or "").strip()
 
-        if s.isdigit() and len(s) == 14:
-            siren = s[:9]
-        elif s.isdigit() and len(s) == 9:
-            siren = s
-        else:
-            return jsonify({"results": [], "error": "Numéro SIREN/SIRET invalide"}), 200
-
-        url = (
-            "https://bodacc-datadila.opendatasoft.com/api/records/1.0/search/"
-            f"?dataset=annonces-commerciales&q={siren}&rows=50&sort=dateparution"
-        )
-
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; RegistreEntreprise/1.0)"}
-
-        try:
-            r = requests.get(url, timeout=20, headers=headers)
-            r.raise_for_status()
-        except requests.exceptions.SSLError as e:
-            current_app.logger.error(f"SSLError BODACC, tentative verify=False : {e}")
-            r = requests.get(url, timeout=20, headers=headers, verify=False)
-            r.raise_for_status()
-
-        data = r.json()
-
-        results = []
-        for rec in data.get("records", []):
-            f = rec.get("fields", {})
-
-            desc = f.get("modificationsgenerales", "") or ""
-            try:
-                j = json.loads(desc)
-                if isinstance(j, dict):
-                    desc = ", ".join(f"{k} : {v}" for k, v in j.items())
-            except Exception:
-                pass
-
-            pdf_url = f.get("urlpdf")
-            if not pdf_url:
-                try:
-                    pdf_url = generate_pdf_url(f)
-                except Exception as e:
-                    current_app.logger.error(f"Erreur generate_pdf_url: {e}")
-                    pdf_url = None
-
-            results.append({
-                "date_parution": f.get("dateparution", ""),
-                "type_document": f.get("familleavis_lib", ""),
-                "tribunal": f.get("tribunal", ""),
-                "type_avis": f.get("typeavis_lib") or f.get("typeavis", ""),
-                "reference": str(f.get("numeroannonce", "")),
-                "description": desc,
-                "pdf_url": pdf_url,
-            })
-
-        return jsonify({"results": results}), 200
-
-    except Exception as e:
-        current_app.logger.exception(f"ERREUR INATTENDUE dans /bodacc : {e!r}")
+    if not s:
+        # Le front attend toujours un JSON avec "results"
         return jsonify({
             "results": [],
-            "error": "Erreur interne /bodacc (voir logs Render)"
+            "error": "Paramètre siret ou siren manquant"
         }), 200
+
+    if s.isdigit() and len(s) == 14:
+        siren = s[:9]
+    elif s.isdigit() and len(s) == 9:
+        siren = s
+    else:
+        return jsonify({
+            "results": [],
+            "error": "Numéro SIREN/SIRET invalide"
+        }), 200
+
+    # --- 2) Appel API BODACC ---
+    url = (
+        "https://bodacc-datadila.opendatasoft.com/api/records/1.0/search/"
+        f"?dataset=annonces-commerciales&q={siren}&rows=50&sort=dateparution"
+    )
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; RegistreEntreprise/1.0)"}
+
+    try:
+        # timeout IMPORTANT pour éviter les WORKER TIMEOUT
+        r = requests.get(url, headers=headers, timeout=8)
+        r.raise_for_status()
+    except requests.RequestException as e:
+        current_app.logger.error(f"Erreur HTTP BODACC pour {siren}: {e!r}")
+        return jsonify({
+            "results": [],
+            "error": "Erreur lors de l'appel à l'API BODACC"
+        }), 502
+
+    # --- 3) Parsing du JSON BODACC ---
+    try:
+        data = r.json()
+    except Exception as e:
+        current_app.logger.error(f"JSON invalide BODACC pour {siren}: {e!r}")
+        return jsonify({
+            "results": [],
+            "error": "Réponse BODACC invalide"
+        }), 502
+
+    results = []
+
+    for rec in data.get("records", []):
+        f = rec.get("fields", {})
+
+        # Description : parfois c'est du JSON, parfois du texte
+        desc = f.get("modificationsgenerales", "") or ""
+        try:
+            j = json.loads(desc)
+            if isinstance(j, dict):
+                desc = ", ".join(f"{k} : {v}" for k, v in j.items())
+        except Exception:
+            # si ce n’est pas du JSON, on garde le texte brut
+            pass
+
+        # PDF : on essaie d'abord urlpdf, sinon url_complete (page détail)
+        pdf_url = f.get("urlpdf") or f.get("url_complete")
+
+        results.append({
+            "date_parution": f.get("dateparution", ""),
+            "type_document": f.get("familleavis_lib", ""),
+            "tribunal": f.get("tribunal", ""),
+            "type_avis": f.get("typeavis_lib") or f.get("typeavis", ""),
+            "reference": str(f.get("numeroannonce", "")),
+            "description": desc,
+            "pdf_url": pdf_url,
+        })
+
+    # --- 4) Réponse finale JSON ---
+    return jsonify({"results": results}), 200
 
 @app.route('/prospection', methods=['GET'])
 def prospection():
