@@ -292,10 +292,17 @@ def bodacc():
 
     results = []
     try:
-        r = requests.get(url, timeout=20)
-        r.raise_for_status()
-        data = r.json()
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; RegisterEntreprise/1.0)"}
 
+        try:
+            r = requests.get(url, timeout=20, headers=headers)
+            r.raise_for_status()
+        except requests.exceptions.SSLError as e:
+            current_app.logger.error(f"SSLError sur BODACC, tentative avec verify=False : {e}")
+            r = requests.get(url, timeout=20, headers=headers, verify=False)
+            r.raise_for_status()
+
+        data = r.json()
         for rec in data.get("records", []):
             f = rec.get("fields", {})
 
