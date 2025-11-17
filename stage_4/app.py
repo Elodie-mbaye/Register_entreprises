@@ -11,7 +11,8 @@ from flask_mail import Mail, Message
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 import pymysql
-from flask import jsonify
+import logging
+from flask import request, jsonify, render_template, redirect, url_for, session, current_app
 
 pymysql.install_as_MySQLdb()
 load_dotenv()
@@ -284,38 +285,61 @@ def bodacc():
             return jsonify({"error": "Numéro SIREN/SIRET invalide."}), 400
         return render_template("bodacc.html", results=[], error="Numéro SIREN/SIRET invalide.")
 
-    url = f"https://bodacc-datadila.opendatasoft.com/api/records/1.0/search/?dataset=annonces-commerciales&q={siren}&rows=50&sort=dateparution"
+    url = (
+        "https://bodacc-datadila.opendatasoft.com/api/records/1.0/search/"
+        f"?dataset=annonces-commerciales&q={siren}&rows=50&sort=dateparution"
+    )
+
     results = []
     try:
         r = requests.get(url, timeout=20)
         r.raise_for_status()
-        for rec in r.json().get("records", []):
+
+        data = r.json()
+        for rec in data.get("records", []):
             f = rec.get("fields", {})
-            desc = f.get("modificationsgenerales", "")
+
+            desc = f.get("modificationsgenerales", "") or ""
             try:
                 j = json.loads(desc)
                 if isinstance(j, dict):
                     desc = ", ".join(f"{k} : {v}" for k, v in j.items())
             except Exception:
                 pass
+
+            pdf_url = f.get("urlpdf")
+            if not pdf_url:
+                try:
+                    pdf_url = generate_pdf_url(f)
+                except Exception as e:
+                    current_app.logger.error(f"Erreur generate_pdf_url: {e}")
+                    pdf_url = None
+
             results.append({
                 "date_parution": f.get("dateparution", ""),
                 "type_document": f.get("familleavis_lib", ""),
                 "tribunal": f.get("tribunal", ""),
                 "type_avis": f.get("typeavis_lib") or f.get("typeavis", ""),
                 "reference": f.get("numeroannonce", ""),
-                "description": desc or "",
-                "pdf_url": f.get("urlpdf") or generate_pdf_url(f),
+                "description": desc,
+                "pdf_url": pdf_url,
             })
+
     except requests.RequestException as e:
+        current_app.logger.error(f"Erreur HTTP BODACC pour {siren}: {e}")
         if request.accept_mimetypes.accept_json:
             return jsonify({"error": f"Erreur récupération annonces BODACC : {e}"}), 502
         return render_template("bodacc.html", results=[], error=f"Erreur BODACC : {e}")
 
+    except Exception as e:
+        current_app.logger.exception(f"Erreur inattendue dans /bodacc pour {siren}")
+        if request.accept_mimetypes.accept_json:
+            return jsonify({"error": "Erreur interne sur /bodacc"}), 500
+        return render_template("bodacc.html", results=[], error="Erreur interne sur /bodacc")
+
     if request.accept_mimetypes.accept_json:
         return jsonify({"results": results})
     return render_template("bodacc.html", results=results)
-
 
 @app.route('/prospection', methods=['GET'])
 def prospection():
