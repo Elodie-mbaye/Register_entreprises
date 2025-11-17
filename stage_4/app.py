@@ -265,44 +265,44 @@ def generate_pdf_url(annonce):
 
 @app.route("/bodacc", methods=["GET"])
 def bodacc():
-    if "user" not in session:
-        if request.accept_mimetypes.accept_json:
-            return jsonify({"error": "Non authentifié"}), 401
-        return redirect(url_for("login"))
+    """
+    Route BODACC blindée pour Render :
+    - ne dépend pas de la session
+    - renvoie toujours du JSON {results: [...]}
+    - n'envoie jamais d'erreur 500 (même en cas de plantage interne)
+    """
 
-    s = (request.args.get("siret") or request.args.get("siren") or "").strip()
-    if not s:
-        if request.accept_mimetypes.accept_json:
-            return jsonify({"error": "Paramètre 'siret' ou 'siren' manquant."}), 400
-        return render_template("bodacc.html", results=[])
-
-    if s.isdigit() and len(s) == 14:
-        siren = s[:9]
-    elif s.isdigit() and len(s) == 9:
-        siren = s
-    else:
-        if request.accept_mimetypes.accept_json:
-            return jsonify({"error": "Numéro SIREN/SIRET invalide."}), 400
-        return render_template("bodacc.html", results=[], error="Numéro SIREN/SIRET invalide.")
-
-    url = (
-        "https://bodacc-datadila.opendatasoft.com/api/records/1.0/search/"
-        f"?dataset=annonces-commerciales&q={siren}&rows=50&sort=dateparution"
-    )
-
-    results = []
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; RegisterEntreprise/1.0)"}
+        s = (request.args.get("siret") or request.args.get("siren") or "").strip()
+
+        if not s:
+            return jsonify({"results": [], "error": "Paramètre siret ou siren manquant"}), 200
+
+        if s.isdigit() and len(s) == 14:
+            siren = s[:9]
+        elif s.isdigit() and len(s) == 9:
+            siren = s
+        else:
+            return jsonify({"results": [], "error": "Numéro SIREN/SIRET invalide"}), 200
+
+        url = (
+            "https://bodacc-datadila.opendatasoft.com/api/records/1.0/search/"
+            f"?dataset=annonces-commerciales&q={siren}&rows=50&sort=dateparution"
+        )
+
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; RegistreEntreprise/1.0)"}
 
         try:
             r = requests.get(url, timeout=20, headers=headers)
             r.raise_for_status()
         except requests.exceptions.SSLError as e:
-            current_app.logger.error(f"SSLError sur BODACC, tentative avec verify=False : {e}")
+            current_app.logger.error(f"SSLError BODACC, tentative verify=False : {e}")
             r = requests.get(url, timeout=20, headers=headers, verify=False)
             r.raise_for_status()
 
         data = r.json()
+
+        results = []
         for rec in data.get("records", []):
             f = rec.get("fields", {})
 
@@ -327,26 +327,19 @@ def bodacc():
                 "type_document": f.get("familleavis_lib", ""),
                 "tribunal": f.get("tribunal", ""),
                 "type_avis": f.get("typeavis_lib") or f.get("typeavis", ""),
-                "reference": f.get("numeroannonce", ""),
+                "reference": str(f.get("numeroannonce", "")),
                 "description": desc,
                 "pdf_url": pdf_url,
             })
 
-    except requests.RequestException as e:
-        current_app.logger.error(f"Erreur HTTP BODACC pour {siren}: {repr(e)}")
-        if request.accept_mimetypes.accept_json:
-            return jsonify({"error": f"Erreur récupération annonces BODACC : {str(e)}"}), 502
-        return render_template("bodacc.html", results=[], error=f"Erreur BODACC : {e}")
+        return jsonify({"results": results}), 200
 
     except Exception as e:
-        current_app.logger.exception(f"Erreur inattendue dans /bodacc pour {siren}")
-        if request.accept_mimetypes.accept_json:
-            return jsonify({"error": "Erreur interne sur /bodacc"}), 500
-        return render_template("bodacc.html", results=[], error="Erreur interne sur /bodacc")
-
-    if request.accept_mimetypes.accept_json:
-        return jsonify({"results": results})
-    return render_template("bodacc.html", results=results)
+        current_app.logger.exception(f"ERREUR INATTENDUE dans /bodacc : {e!r}")
+        return jsonify({
+            "results": [],
+            "error": "Erreur interne /bodacc (voir logs Render)"
+        }), 200
 
 @app.route('/prospection', methods=['GET'])
 def prospection():
