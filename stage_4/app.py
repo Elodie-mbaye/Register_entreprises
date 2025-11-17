@@ -294,8 +294,8 @@ def bodacc():
     try:
         r = requests.get(url, timeout=20)
         r.raise_for_status()
-
         data = r.json()
+
         for rec in data.get("records", []):
             f = rec.get("fields", {})
 
@@ -326,9 +326,9 @@ def bodacc():
             })
 
     except requests.RequestException as e:
-        current_app.logger.error(f"Erreur HTTP BODACC pour {siren}: {e}")
+        current_app.logger.error(f"Erreur HTTP BODACC pour {siren}: {repr(e)}")
         if request.accept_mimetypes.accept_json:
-            return jsonify({"error": f"Erreur récupération annonces BODACC : {e}"}), 502
+            return jsonify({"error": f"Erreur récupération annonces BODACC : {str(e)}"}), 502
         return render_template("bodacc.html", results=[], error=f"Erreur BODACC : {e}")
 
     except Exception as e:
