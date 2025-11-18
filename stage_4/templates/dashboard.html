@@ -17,8 +17,47 @@
     header, footer {
       background-color: #2a6f97;
       color: white;
-      text-align: center;
       padding: 1rem;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 1.4rem;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .nav-links a {
+      color: white;
+      text-decoration: none;
+      padding: 0.4rem 0.8rem;
+      border-radius: 999px;
+      font-size: 0.9rem;
+      background: rgba(255,255,255,0.15);
+      transition: background-color 0.2s ease, transform 0.1s ease;
+    }
+
+    .nav-links a:hover {
+      background: rgba(255,255,255,0.3);
+      transform: translateY(-1px);
+    }
+
+    .nav-links a.active {
+      background: white;
+      color: #2a6f97;
+      font-weight: 600;
     }
 
     .container {
@@ -80,9 +119,17 @@
 <body>
   <header>
     <h1>Tableau de bord des recherches</h1>
-  </header>
+    <nav class="nav-links">
+  <a href="{{ url_for('search_company') }}">Recherche</a>
+  <a href="{{ url_for('dashboard') }}" class="active">Dashboard</a>
+  <a href="{{ url_for('notes_page') }}">Notes</a>
+  <a href="{{ url_for('articles_page') }}">Articles</a>
+  <a href="{{ url_for('logout') }}">Déconnexion</a>
+</nav>
+</header>
 
   <div class="container">
+    <!-- Bouton retour (facultatif, tu peux le retirer si le menu te suffit) -->
     <a href="{{ url_for('search_company') }}" class="back-btn">← Retour à la recherche</a>
 
     <div class="chart-container">
